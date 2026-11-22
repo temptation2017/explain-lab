@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>explain-lab — SQL EXPLAIN 计划树本地查看</title>
+  <meta name="description" content="在浏览器里粘贴 MySQL、PostgreSQL 或 SQLite 的 EXPLAIN 输出，本地画出计划树并标出全表扫描、filesort 和行数估计偏差。不上传。">
+  <style>
+    :root {
+      --bg: #10161a; --bg-2: #171e24; --paper: #1c252c; --ink: #e6eef2;
+      --muted: #8b9aa4; --line: #2b3841;
+      --ok: #3ecfbf; --ok-dim: rgba(62, 207, 191, 0.16);
+      --warn: #e0b45c; --warn-dim: rgba(224, 180, 92, 0.16);
+      --bad: #e06a5c; --bad-dim: rgba(224, 106, 92, 0.16);
+      --info: #6ea8e8; --info-dim: rgba(110, 168, 232, 0.14);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink); }
+    body {
+      font-family: "IBM Plex Sans", "Noto Sans SC", "Source Han Sans SC", "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.5; min-height: 100vh;
+    }
+    .wrap { max-width: 1120px; margin: 0 auto; padding: 1.6rem 1.2rem 3rem; }
+    header h1 {
+      font-family: ui-monospace, "IBM Plex Mono", "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+      font-size: 1.35rem; font-weight: 600; letter-spacing: 0.02em; margin: 0 0 0.35rem;
+    }
+    header h1 span.accent { color: var(--ok); }
+    .badge {
+      display: inline-block; margin-left: 0.5rem; padding: 0.05rem 0.45rem;
+      border: 1px solid var(--ok); color: var(--ok); font-size: 0.7rem;
+      vertical-align: middle; letter-spacing: 0.04em;
+    }
+    .lede { margin: 0; color: var(--muted); max-width: 48rem; }
+    .panel {
+      margin-top: 1.25rem; background: var(--paper);
+      border: 1px solid var(--line); border-radius: 8px; padding: 0.9rem;
+    }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+    .field-label { display: block; color: var(--muted); font-size: 0.78rem; margin: 0 0 0.35rem; }
+    textarea {
+      width: 100%; min-height: 280px; resize: vertical;
+      background: var(--bg); color: var(--ink);
+      border: 1px solid var(--line); border-radius: 6px;
+      padding: 0.7rem 0.8rem; line-height: 1.45; font-size: 0.78rem;
+      font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    }
+    textarea:focus { outline: 2px solid var(--ok); outline-offset: 1px; }
+    .samples, .actions { display: flex; flex-wrap: wrap; gap: 0.45rem; margin-top: 0.7rem; }
+    button {
+      appearance: none; background: var(--bg-2); color: var(--ink);
+      border: 1px solid var(--line); border-radius: 999px;
+      padding: 0.28rem 0.7rem; font-size: 0.78rem; cursor: pointer;
+    }
+    button:hover { border-color: var(--ok); color: var(--ok); }
+    button.primary { background: var(--ok-dim); border-color: var(--ok); color: var(--ok); }
+    .chips { display: flex; flex-wrap: wrap; gap: 0.45rem; margin: 0.2rem 0 0.8rem; }
+    .chip {
+      font-size: 0.75rem; padding: 0.2rem 0.55rem; border-radius: 999px;
+      border: 1px solid var(--line); color: var(--muted); background: var(--bg);
+    }
+    .chip.ok { border-color: var(--ok); color: var(--ok); background: var(--ok-dim); }
+    .chip.warn { border-color: var(--warn); color: var(--warn); background: var(--warn-dim); }
+    .chip.bad { border-color: var(--bad); color: var(--bad); background: var(--bad-dim); }
+    .chip.info { border-color: var(--info); color: var(--info); background: var(--info-dim); }
+    .warn-list { margin: 0 0 0.8rem; padding: 0; list-style: none; }
+    .warn-list li {
+      font-size: 0.82rem; margin: 0 0 0.35rem; padding: 0.4rem 0.55rem;
+      border-radius: 6px; border: 1px solid var(--line);
+    }
+    .warn-list li.warn { border-color: var(--warn); background: var(--warn-dim); }
+    .warn-list li.bad { border-color: var(--bad); background: var(--bad-dim); }
+    .warn-list .flag { font-weight: 600; }
+    .empty, .error { color: var(--muted); font-size: 0.88rem; }
+    .error { color: var(--bad); }
+    .tree { font-size: 0.82rem; }
+    .node {
+      margin: 0.35rem 0; border-left: 3px solid var(--line);
+      padding: 0.4rem 0.55rem 0.35rem 0.65rem;
+      background: var(--bg); border-radius: 0 6px 6px 0;
+    }
+    .node.ok { border-left-color: var(--ok); }
+    .node.warn { border-left-color: var(--warn); background: var(--warn-dim); }
+    .node.bad { border-left-color: var(--bad); background: var(--bad-dim); }
+    .node-title {
+      font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+      font-size: 0.8rem; word-break: break-word;
+    }
+    .node-flags { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.25rem; }
+    .node-flags span {
+      font-size: 0.7rem; padding: 0.05rem 0.4rem; border-radius: 999px;
+      border: 1px solid var(--line); color: var(--muted);
+    }
+    .node-meta {
+      color: var(--muted); font-size: 0.72rem; margin-top: 0.2rem;
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    }
+    .node-details { color: var(--muted); font-size: 0.72rem; margin-top: 0.15rem; }
+    .node-details div { margin: 0.05rem 0; }
+    .kids { margin-left: 0.6rem; }
+    footer { margin-top: 1.5rem; color: var(--muted); font-size: 0.78rem; }
+    footer a { color: var(--info); }
+    .toast { color: var(--ok); font-size: 0.78rem; margin-left: 0.4rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>explain-lab <span class="accent">EXPLAIN</span><span class="badge">本地 · 不上传</span></h1>
+      <p class="lede">把 MySQL、PostgreSQL 或 SQLite 的 EXPLAIN / EXPLAIN ANALYZE 输出贴进来，在浏览器里画出计划树，并标出全表扫描、filesort、磁盘排序和行数估计偏差。计算都在本机完成，不会把内容发到任何服务器。</p>
+    </header>
+    <div class="grid">
+      <section class="panel">
+        <label class="field-label" for="src">EXPLAIN 输出</label>
+        <textarea id="src" spellcheck="false" placeholder="粘贴 EXPLAIN、EXPLAIN ANALYZE、FORMAT=JSON / TREE，或 SQLite 的 QUERY PLAN……"></textarea>
+        <div class="samples" id="samples"></div>
+        <div class="actions">
+          <button type="button" class="primary" id="btn-copy">复制 Markdown 摘要</button>
+          <button type="button" id="btn-clear">清空</button>
+          <span class="toast" id="toast" hidden>已复制</span>
+        </div>
+      </section>
+      <section class="panel" id="out">
+        <p class="empty">左侧贴入计划，或点一个示例。</p>
+      </section>
+    </div>
+    <footer>
+      示例里的表名、行数和条件都是虚构样本。解析按常见输出格式编写，不保证覆盖每一种发行版的私有扩展。源码：<a href="https://github.com/temptation2017/explain-lab">temptation2017/explain-lab</a>
+    </footer>
+  </div>
+  <script src="explain.js"></script>
+  <script src="samples.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
